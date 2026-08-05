@@ -11,7 +11,7 @@ composeBom = "2024.09.00"
 googleServices = "4.4.4"
 firebaseBom = "34.7.0"
 room = "2.6.1"
-ksp = "2.0.21-1.0.27"
+ksp = "2.3.11"
 fragmentKtx = "1.8.4"
 
 [libraries]
