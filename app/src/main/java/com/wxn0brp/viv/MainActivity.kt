@@ -1,6 +1,7 @@
 package com.wxn0brp.viv
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -51,6 +53,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.tasks.OnCompleteListener
 import com.google.firebase.messaging.FirebaseMessaging
@@ -68,7 +71,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // FCM SDK (and your app) can post notifications.
+            // FCM SDK can post notifications.
         }
     }
 
@@ -80,10 +83,8 @@ class MainActivity : ComponentActivity() {
         val database = (application as ViVApplication).database
         val notificationDao = database.notificationDao()
 
-        // Obsługa powiadomienia, które otworzyło aplikację
         handleIntent(intent)
 
-        // Usuwanie starych powiadomień przy starcie (starsze niż 20 dni)
         lifecycleScope.launch {
             val twentyDaysAgo = System.currentTimeMillis() - (20L * 24 * 60 * 60 * 1000)
             notificationDao.deleteOldNotifications(twentyDaysAgo)
@@ -105,10 +106,18 @@ class MainActivity : ComponentActivity() {
             ViVTheme {
                 val notifications by notificationDao.getAllNotifications().collectAsState(initial = emptyList())
                 
+                val prefs = remember { getSharedPreferences("viv_prefs", Context.MODE_PRIVATE) }
+                var bypassTags by remember { mutableStateOf(prefs.getString("bypass_tags", "ALARM") ?: "ALARM") }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MainScreen(
                         token = fcmToken,
                         notifications = notifications,
+                        bypassTags = bypassTags,
+                        onBypassTagsChange = { newTags ->
+                            bypassTags = newTags
+                            prefs.edit { putString("bypass_tags", newTags) }
+                        },
                         onDeleteClick = { notification ->
                             lifecycleScope.launch {
                                 notificationDao.delete(notification)
@@ -133,7 +142,6 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent?.extras?.let { extras ->
-            // Firebase konsola wysyła dane w tych kluczach, gdy app jest w tle
             val title = extras.getString("gcm.notification.title") ?: extras.getString("title")
             val body = extras.getString("gcm.notification.body") ?: extras.getString("body")
 
@@ -148,7 +156,6 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                 }
-                // Czyścimy extras, żeby nie dodać tego samego powiadomienia przy obracaniu ekranu
                 intent.removeExtra("gcm.notification.title")
                 intent.removeExtra("gcm.notification.body")
                 intent.removeExtra("title")
@@ -172,16 +179,32 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun fuzzySearchMatch(query: String, text: String): Boolean {
+    if (query.isEmpty()) return true
+    var queryIdx = 0
+    for (char in text) {
+        if (char.equals(query[queryIdx], ignoreCase = true)) {
+            queryIdx++
+            if (queryIdx == query.length) return true
+        }
+    }
+    return false
+}
+
 @Composable
 fun MainScreen(
     token: String, 
     notifications: List<NotificationEntity>, 
+    bypassTags: String,
+    onBypassTagsChange: (String) -> Unit,
     onDeleteClick: (NotificationEntity) -> Unit,
     onDeleteAllClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isTokenVisible by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showSettings by remember { mutableStateOf(false) }
 
     if (showDeleteConfirmDialog) {
         AlertDialog(
@@ -211,29 +234,80 @@ fun MainScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Twój FCM Token:",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        
-        OutlinedTextField(
-            value = token,
-            onValueChange = {},
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            readOnly = true,
-            label = { Text("FCM Token") },
-            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            visualTransformation = if (isTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                val icon = if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility
-                IconButton(onClick = { isTokenVisible = !isTokenVisible }) {
-                    Icon(imageVector = icon, contentDescription = if (isTokenVisible) "Ukryj" else "Pokaż")
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "ViV Historia",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = { showSettings = !showSettings }) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Ustawienia",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        if (showSettings) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "Ustawienia",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = token,
+                        onValueChange = {},
+                        modifier = Modifier.fillMaxWidth(),
+                        readOnly = true,
+                        label = { Text("FCM Token") },
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        visualTransformation = if (isTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            val icon = if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility
+                            IconButton(onClick = { isTokenVisible = !isTokenVisible }) {
+                                Icon(imageVector = icon, contentDescription = if (isTokenVisible) "Ukryj" else "Pokaż")
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = bypassTags,
+                        onValueChange = onBypassTagsChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Tagi bypass") },
+                        placeholder = { Text("ALARM, INFO") }
+                    )
                 }
             }
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Szukaj") },
+            placeholder = { Text("Szukaj...") }
         )
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
         
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -241,8 +315,8 @@ fun MainScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Historia powiadomień:",
-                style = MaterialTheme.typography.titleLarge
+                text = if (searchQuery.isEmpty()) "Wszystkie powiadomienia:" else "Wyniki wyszukiwania:",
+                style = MaterialTheme.typography.titleMedium
             )
             
             if (notifications.isNotEmpty()) {
@@ -257,10 +331,17 @@ fun MainScreen(
         }
         
         Spacer(modifier = Modifier.height(8.dp))
+
+        val filteredNotifications = remember(notifications, searchQuery) {
+            notifications.filter { notification ->
+                val fullText = "${notification.title ?: ""} ${notification.body ?: ""}"
+                fuzzySearchMatch(searchQuery, fullText)
+            }
+        }
         
-        if (notifications.isEmpty()) {
+        if (filteredNotifications.isEmpty()) {
             Text(
-                text = "Brak otrzymanych powiadomień.",
+                text = "Brak powiadomień do wyświetlenia.",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(vertical = 16.dp)
             )
@@ -268,7 +349,7 @@ fun MainScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                items(notifications, key = { it.id }) { notification ->
+                items(filteredNotifications, key = { it.id }) { notification ->
                     NotificationItem(notification, onDeleteClick)
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -326,6 +407,8 @@ fun MainScreenPreview() {
                 NotificationEntity(1, "Tytuł 1", "Treść powiadomienia 1", System.currentTimeMillis()),
                 NotificationEntity(2, "Tytuł 2", "Treść powiadomienia 2", System.currentTimeMillis())
             ),
+            bypassTags = "ALARM",
+            onBypassTagsChange = {},
             onDeleteClick = {},
             onDeleteAllClick = {}
         )
