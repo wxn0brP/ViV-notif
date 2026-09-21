@@ -358,9 +358,10 @@ fun MainScreen(
     }
 }
 
+private val sdf = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault())
+
 @Composable
 fun NotificationItem(notification: NotificationEntity, onDeleteClick: (NotificationEntity) -> Unit) {
-    val sdf = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault())
     val time = sdf.format(Date(notification.timestamp))
     
     Card(
