@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +62,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val sdf = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault())
 
 class MainActivity : ComponentActivity() {
 
@@ -191,6 +193,7 @@ fun fuzzySearchMatch(query: String, text: String): Boolean {
     return false
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(
     token: String, 
@@ -203,8 +206,32 @@ fun MainScreen(
 ) {
     var isTokenVisible by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var notificationToDelete by remember { mutableStateOf<NotificationEntity?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+
+    notificationToDelete?.let { notification ->
+        AlertDialog(
+            onDismissRequest = { notificationToDelete = null },
+            title = { Text(text = "Usuń powiadomienie") },
+            text = { Text(text = "Czy na pewno chcesz usunąć to powiadomienie?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteClick(notification)
+                        notificationToDelete = null
+                    }
+                ) {
+                    Text("Tak, usuń")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { notificationToDelete = null }) {
+                    Text("Anuluj")
+                }
+            }
+        )
+    }
 
     if (showDeleteConfirmDialog) {
         AlertDialog(
@@ -346,53 +373,28 @@ fun MainScreen(
                 modifier = Modifier.padding(vertical = 16.dp)
             )
         } else {
+            val formattedItems = remember(filteredNotifications) {
+                filteredNotifications.map { n ->
+                    val time = sdf.format(Date(n.timestamp))
+                    Triple(n, "${n.title ?: "Brak tytułu"} ($time)", n.body ?: "Brak treści")
+                }
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                items(filteredNotifications, key = { it.id }) { notification ->
-                    NotificationItem(notification, onDeleteClick)
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                items(formattedItems, key = { it.first.id }) { (notification, titleLine, bodyLine) ->
+                    Text(
+                        text = "$titleLine\n$bodyLine",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {},
+                                onLongClick = { notificationToDelete = notification }
+                            )
+                            .padding(vertical = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
-            }
-        }
-    }
-}
-
-private val sdf = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault())
-
-@Composable
-fun NotificationItem(notification: NotificationEntity, onDeleteClick: (NotificationEntity) -> Unit) {
-    val time = sdf.format(Date(notification.timestamp))
-    
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "[$time] ${notification.title ?: "Brak tytułu"}",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = notification.body ?: "Brak treści",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-            
-            IconButton(onClick = { onDeleteClick(notification) }) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Usuń",
-                    tint = MaterialTheme.colorScheme.error
-                )
             }
         }
     }
